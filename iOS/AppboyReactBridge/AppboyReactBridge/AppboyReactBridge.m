@@ -14,7 +14,9 @@ RCT_ENUM_CONVERTER(ABKNotificationSubscriptionType,
                    integerValue);
 @end
 
-@implementation AppboyReactBridge
+@implementation AppboyReactBridge {
+  NSMutableArray *_getFeedCardsCallbacks;
+}
 
 - (dispatch_queue_t)methodQueue
 {
@@ -42,8 +44,64 @@ RCT_ENUM_CONVERTER(ABKNotificationSubscriptionType,
   }
 }
 
+- (void)reportResultWithMultipleCallbacksAndClear:(NSMutableArray *)callbacks
+                                         andError:(NSString *)error
+                                        andResult:(id)result {
+  RCTResponseSenderBlock callback;
+  for (callback in callbacks)
+    [self reportResultWithCallback:callback andError:error andResult:result];
+
+  [callbacks removeAllObjects];
+}
+
 RCT_EXPORT_METHOD(setSDKFlavor) {
   [Appboy sharedInstance].sdkFlavor = REACT;
+}
+
+- (void)feedUpdated:(NSNotification *)notification {
+  RCTLogInfo(@"[Appboy sharedInstance] feedReceived");
+  [[NSNotificationCenter defaultCenter]
+      removeObserver:self
+                name:ABKFeedUpdatedNotification
+              object:nil];
+
+  BOOL updateIsSuccessful =
+      [notification.userInfo[ABKFeedUpdatedIsSuccessfulKey] boolValue];
+  NSMutableArray *jsonCards = [NSMutableArray array];
+
+  NSArray *cards = [[Appboy sharedInstance].feedController
+      getCardsInCategories:ABKCardCategoryAll];
+
+  if (!updateIsSuccessful ||
+      [Appboy sharedInstance].feedController.lastUpdate == nil) {
+      RCTLogInfo(@"[Appboy sharedInstance] reporting Feed through callback "
+                 @"with Error");
+      [self reportResultWithMultipleCallbacksAndClear:_getFeedCardsCallbacks
+                                             andError:@"No fetch completed"
+                                            andResult:nil];
+      return;
+    }
+
+  for (ABKCard *card in cards) {
+    NSError *error = nil;
+    NSDictionary *dict =
+        [NSJSONSerialization JSONObjectWithData:[card serializeToData]
+                                        options:0
+                                          error:&error];
+
+    if (dict != nil && error == nil) {
+      [jsonCards addObject:dict];
+    } else {
+      RCTLogInfo(@"Warning: Error serializing feed card to JSON.");
+      error = nil;
+    }
+  }
+
+  RCTLogInfo(
+      @"[Appboy sharedInstance] reporting Feed through callback with Success");
+  [self reportResultWithMultipleCallbacksAndClear:_getFeedCardsCallbacks
+                                         andError:nil
+                                        andResult:jsonCards];
 }
 
 // Returns the deep link from the push dictionary in application:didFinishLaunchingWithOptions: launchOptions, if one exists
@@ -264,28 +322,17 @@ RCT_EXPORT_METHOD(requestFeedRefresh) {
   [[Appboy sharedInstance] requestFeedRefresh];
 }
 
-RCT_EXPORT_METHOD(getFeedCards:(RCTResponseSenderBlock)callback) {
-  NSMutableArray *jsonCards = [NSMutableArray array];
-  NSArray *cards = [[Appboy sharedInstance].feedController getCardsInCategories:ABKCardCategoryAll];
-
-  if (cards.count == 0 && [Appboy sharedInstance].feedController.lastUpdate == nil) {
-    [self reportResultWithCallback:callback andError:@"No fetch completed" andResult:nil];
-    return;
+RCT_EXPORT_METHOD(getFeedCards : (RCTResponseSenderBlock)callback) {
+  RCTLogInfo(@"[Appboy sharedInstance] feedRequested");
+  if (!_getFeedCardsCallbacks) {
+    _getFeedCardsCallbacks = [[NSMutableArray alloc] init];
   }
-
-  for (ABKCard *card in cards) {
-    NSError *error = nil;
-    NSDictionary *dict = [NSJSONSerialization JSONObjectWithData:[card serializeToData] options:0 error:&error];
-
-    if (dict != nil && error == nil) {
-      [jsonCards addObject:dict];
-    } else {
-      RCTLogInfo(@"Warning: Error serializing feed card to JSON.");
-      error = nil;
-    }
-  }
-
-  [self reportResultWithCallback:callback andError:nil andResult:jsonCards];
+  [_getFeedCardsCallbacks addObject:callback];
+  [[NSNotificationCenter defaultCenter] addObserver:self
+                                           selector:@selector(feedUpdated:)
+                                               name:ABKFeedUpdatedNotification
+                                             object:nil];
+  [[Appboy sharedInstance] requestFeedRefresh];
 }
 
 RCT_EXPORT_METHOD(logFeedCardClick: (NSString *)id) {
