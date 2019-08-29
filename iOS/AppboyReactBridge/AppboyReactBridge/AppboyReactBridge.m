@@ -7,6 +7,8 @@
 #import "ABKModalFeedbackViewController.h"
 #import "ABKNewsFeedViewController.h"
 
+static NSString *const kContentCardsUpdatedEvent = @"contentCardsUpdated";
+
 @implementation RCTConvert (AppboySubscriptionType)
 RCT_ENUM_CONVERTER(ABKNotificationSubscriptionType,
                    (@{@"subscribed":@(ABKSubscribed), @"unsubscribed":@(ABKUnsubscribed),@"optedin":@(ABKOptedIn)}),
@@ -16,11 +18,30 @@ RCT_ENUM_CONVERTER(ABKNotificationSubscriptionType,
 
 @implementation AppboyReactBridge {
   NSMutableArray *_getFeedCardsCallbacks;
+  bool hasListeners;
 }
 
 - (dispatch_queue_t)methodQueue
 {
   return dispatch_get_main_queue();
+}
+- (void)startObserving {
+  hasListeners = YES;
+  [[NSNotificationCenter defaultCenter] addObserver:self
+                                        selector:@selector(handleContentCardsUpdated:)
+                                        name:ABKContentCardsProcessedNotification
+                                        object:nil];
+}
+
+- (void)stopObserving {
+  hasListeners = NO;
+  [[NSNotificationCenter defaultCenter] removeObserver:self];
+}
+
+- (NSArray<NSString *> *)supportedEvents {
+  return @[
+    kContentCardsUpdatedEvent
+  ];
 }
 
 + (BOOL)requiresMainQueueSetup {
@@ -341,6 +362,34 @@ RCT_EXPORT_METHOD(launchNewsFeed) {
   [mainViewController presentViewController:feedModal animated:YES completion:nil];
 }
 
+#pragma mark - Content Cards
+
+- (void)handleContentCardsUpdated:(NSNotification *)notification {
+  BOOL updateIsSuccessful = [notification.userInfo[ABKContentCardsProcessedIsSuccessfulKey] boolValue];
+  if (hasListeners && updateIsSuccessful) {
+    RCTLogInfo(@"contentCardsUpdated sent to the bridge");
+    [self sendEventWithName:kContentCardsUpdatedEvent body:nil];
+  }
+}
+
+- (NSArray *)getMappedContentCards {
+  NSArray<ABKContentCard *> *cards = [[Appboy sharedInstance].contentCardsController getContentCards];
+
+  NSMutableArray *mappedCards = [NSMutableArray arrayWithCapacity:[cards count]];
+  [cards enumerateObjectsUsingBlock:^(id card, NSUInteger idx, BOOL *stop) {
+    [mappedCards addObject:RCTFormatContentCard(card)];
+  }];
+
+  return mappedCards;
+}
+
+- (nullable ABKContentCard *)getContentCardById:(NSString *)idString {
+  NSArray<ABKContentCard *> *cards = [[Appboy sharedInstance].contentCardsController getContentCards];
+  NSPredicate *predicate = [NSPredicate predicateWithFormat:@"idString == %@", idString];
+  NSArray *filteredArray = [cards filteredArrayUsingPredicate:predicate];
+  return [[cards filteredArrayUsingPredicate:predicate] firstObject];
+}
+
 - (ABKCardCategory)getCardCategoryForString:(NSString *)category {
   ABKCardCategory cardCategory = 0;
   if ([[category lowercaseString] isEqualToString:@"advertising"]) {
@@ -357,6 +406,85 @@ RCT_EXPORT_METHOD(launchNewsFeed) {
     cardCategory = ABKCardCategoryAll;
   }
   return cardCategory;
+}
+
+RCT_REMAP_METHOD(getContentCards, getContentCardsWithResolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
+  RCTLogInfo(@"getContentCards called");
+  resolve([self getMappedContentCards]);
+}
+
+RCT_EXPORT_METHOD(logContentCardClicked:(NSString *)idString) {
+  ABKContentCard * cardToClick = [self getContentCardById:idString];
+  RCTLogInfo(@"logContentCardClicked with idString %@", idString);
+  if (cardToClick) {
+    [cardToClick logContentCardClicked];
+  }
+}
+
+RCT_EXPORT_METHOD(logContentCardDismissed:(NSString *)idString) {
+  ABKContentCard * cardToClick = [self getContentCardById:idString];
+  RCTLogInfo(@"logContentCardDismissed with idString %@", idString);
+  if (cardToClick) {
+    [cardToClick logContentCardDismissed];
+  }
+}
+
+RCT_EXPORT_METHOD(logContentCardImpression:(NSString *)idString) {
+  ABKContentCard * cardToClick = [self getContentCardById:idString];
+  RCTLogInfo(@"logContentCardImpression with idString %@", idString);
+  if (cardToClick) {
+    [cardToClick logContentCardImpression];
+  }
+}
+
+RCT_EXPORT_METHOD(logContentCardsDisplayed) {
+  RCTLogInfo(@"logContentCardsDisplayed called");
+  [[Appboy sharedInstance] logContentCardsDisplayed];
+}
+
+static NSDictionary *RCTFormatContentCard(ABKContentCard *card) {
+  NSMutableDictionary *formattedContentCardData = [NSMutableDictionary dictionary];
+
+  formattedContentCardData[@"id"] = card.idString;
+  formattedContentCardData[@"created"] = @(card.created);
+  formattedContentCardData[@"expiresAt"] = @(card.expiresAt);
+  formattedContentCardData[@"viewed"] = @(card.viewed);
+  formattedContentCardData[@"clicked"] = @(card.clicked);
+  formattedContentCardData[@"pinned"] = @(card.pinned);
+  formattedContentCardData[@"dismissed"] = @(card.dismissed);
+  formattedContentCardData[@"dismissible"] = @(card.dismissible);
+  formattedContentCardData[@"url"] = RCTNullIfNil(card.urlString);
+  formattedContentCardData[@"openURLInWebView"] = @(card.openUrlInWebView);
+
+  formattedContentCardData[@"extras"] = card.extras ? RCTJSONClean(card.extras) : @{};
+
+  if ([card isKindOfClass:[ABKCaptionedImageContentCard class]]) {
+    ABKCaptionedImageContentCard *captionedCard = (ABKCaptionedImageContentCard *)card;
+    formattedContentCardData[@"image"] = captionedCard.image;
+    formattedContentCardData[@"imageAspectRatio"] = @(captionedCard.imageAspectRatio);
+    formattedContentCardData[@"title"] = captionedCard.title;
+    formattedContentCardData[@"cardDescription"] = captionedCard.cardDescription;
+    formattedContentCardData[@"domain"] = RCTNullIfNil(captionedCard.domain);
+    formattedContentCardData[@"type"] = @"Captioned";
+  }
+
+  if ([card isKindOfClass:[ABKBannerContentCard class]]) {
+    ABKBannerContentCard *bannerCard = (ABKBannerContentCard *)card;
+    formattedContentCardData[@"image"] = bannerCard.image;
+    formattedContentCardData[@"imageAspectRatio"] = @(bannerCard.imageAspectRatio);
+    formattedContentCardData[@"type"] = @"Banner";
+  }
+
+  if ([card isKindOfClass:[ABKClassicContentCard class]]) {
+    ABKClassicContentCard *classicCard = (ABKClassicContentCard *)card;
+    formattedContentCardData[@"image"] = RCTNullIfNil(classicCard.image);
+    formattedContentCardData[@"title"] = classicCard.title;
+    formattedContentCardData[@"cardDescription"] = classicCard.cardDescription;
+    formattedContentCardData[@"domain"] = RCTNullIfNil(classicCard.domain);
+    formattedContentCardData[@"type"] = @"Classic";
+  }
+
+  return formattedContentCardData;
 }
 
 RCT_EXPORT_METHOD(requestFeedRefresh) {
