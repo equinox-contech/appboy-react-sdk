@@ -1,6 +1,8 @@
 // Definitions by: ahanriat <https://github.com/ahanriat>
 // TypeScript Version: 3.0
 
+import { EmitterSubscription } from 'react-native';
+
 /**
  * When launching an iOS application that has previously been force closed, React Native's Linking API doesn't
  * support handling deep links embedded in push notifications. This is due to a race condition on startup between
@@ -377,6 +379,108 @@ interface NotificationSubscriptionType {
 export const NotificationSubscriptionTypes : NotificationSubscriptionType;
 
 type Callback = (error: object, result: object) => void;
+
+interface ContentCardType {
+  CLASSIC: 'Classic',
+  BANNER: 'Banner',
+  CAPTIONED: 'Captioned',
+}
+export const ContentCardTypes: ContentCardType;
+
+export interface ContentCard {
+  id: string;
+  created: number;
+  expiresAt: number; // card.expiresAt * 1000 needed?
+  type: ContentCardType;
+  viewed: boolean;
+  clicked: boolean;
+  pinned: boolean;
+  dismissed: boolean;
+  dismissible: boolean;
+  url?: string;
+  openURLInWebView: boolean;
+  extras: { [key: string]: string };
+}
+
+export interface ClassicContentCard extends ContentCard {
+  image?: string;
+  title: string;
+  cardDescription: string;
+  domain?: string;
+}
+
+export interface BannerContentCard extends ContentCard {
+  image: string;
+  imageAspectRatio: number;
+}
+
+export interface CaptionedContentCard extends ContentCard {
+  image: string;
+  imageAspectRatio: number;
+  title: string;
+  cardDescription: string;
+  domain?: string;
+}
+
+/**
+ * Launches the Content Cards UI element.
+ */
+export function launchContentCards(): void;
+
+/**
+ * Requests a refresh of the content cards from Appboy's servers.
+ */
+export function requestContentCardsRefresh(): void;
+
+/**
+ * Manually log a click to Braze for a particular card.
+ * The SDK will only log a card click when the card has the url property with a valid value.
+ * @param {string} id
+ */
+export function logContentCardClicked(id: string): void;
+
+/**
+ * Manually log a dismissal to Braze for a particular card.
+ * @param {string} id
+ */
+export function logContentCardDismissed(id: string): void;
+
+/**
+ * Manually log an impression to Braze for a particular card.
+ * @param {string} id
+ */
+export function logContentCardImpression(id: string): void;
+
+/**
+ * When displaying the Content Cards in your own user interface,
+ * you can manually record Content Cards impressions via the method logContentCardsDisplayed;
+ */
+export function logContentCardsDisplayed(): void;
+
+/**
+ * Returns a content cards array
+ * @returns {Promise<ContentCard[]>}
+ */
+export function getContentCards(): Promise<ContentCard[]>;
+
+interface AppboyEvent {
+  CONTENT_CARDS_UPDATED: 'contentCardsUpdated',
+}
+export const AppboyEvents : AppboyEvent;
+
+/**
+ * Subscribes to the specific SDK event
+ * @param {AppboyEvents} event
+ * @param {function} subscriber
+ */
+export function addListener(event: AppboyEvent[keyof AppboyEvent], subscriber: Function): EmitterSubscription;
+
+/**
+ * Removes subscriptions for the specific SDK event and subscriber
+ * @param {AppboyEvents} event
+ * @param {function} subscriber
+ */
+export function removeSubscription(event: AppboyEvent[keyof AppboyEvent], subscriber: Function): void;
 
 type BrazeCurrencyCode =
   | 'AED'
