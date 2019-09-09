@@ -1,6 +1,7 @@
 package com.appboy.reactbridge;
 
 import android.content.Intent;
+import android.support.annotation.Nullable;
 import android.util.Log;
 
 import com.appboy.Appboy;
@@ -8,8 +9,14 @@ import com.appboy.enums.Gender;
 import com.appboy.enums.Month;
 import com.appboy.enums.NotificationSubscriptionType;
 import com.appboy.enums.CardCategory;
+import com.appboy.events.ContentCardsUpdatedEvent;
 import com.appboy.events.FeedUpdatedEvent;
 import com.appboy.events.IEventSubscriber;
+import com.appboy.models.cards.BannerImageCard;
+import com.appboy.models.cards.CaptionedImageCard;
+import com.appboy.models.cards.Card;
+import com.appboy.models.cards.ShortNewsCard;
+import com.appboy.models.cards.TextAnnouncementCard;
 import com.appboy.models.cards.Card;
 import com.appboy.models.outgoing.AppboyProperties;
 import com.appboy.models.outgoing.AttributionData;
@@ -19,6 +26,8 @@ import com.appboy.services.AppboyLocationService;
 import com.appboy.support.AppboyLogger;
 import com.appboy.ui.activities.AppboyFeedActivity;
 import com.appboy.ui.inappmessage.AppboyInAppMessageManager;
+import com.facebook.react.bridge.Arguments;
+import com.facebook.react.bridge.Promise;
 import com.facebook.react.bridge.ReactApplicationContext;
 import com.facebook.react.bridge.ReactContextBaseJavaModule;
 import com.facebook.react.bridge.ReactMethod;
@@ -27,6 +36,9 @@ import com.facebook.react.bridge.ReadableMap;
 import com.facebook.react.bridge.ReadableMapKeySetIterator;
 import com.facebook.react.bridge.ReadableType;
 import com.facebook.react.bridge.Callback;
+import com.facebook.react.bridge.WritableArray;
+import com.facebook.react.bridge.WritableMap;
+import com.facebook.react.modules.core.DeviceEventManagerModule;
 import com.facebook.react.bridge.WritableArray;
 import com.facebook.react.bridge.WritableMap;
 import com.facebook.react.bridge.WritableNativeArray;
@@ -47,12 +59,38 @@ public class AppboyReactBridge extends ReactContextBaseJavaModule {
   private static final String UNREAD_CARD_COUNT_TAG = "unread card count";
   private static final String DURATION_SHORT_KEY = "SHORT";
   private static final String DURATION_LONG_KEY = "LONG";
+  private static final String CONTENT_CARDS_UPDATED_EVENT_NAME = "contentCardsUpdated";
+  private static final String TYPE_CAPTIONED = "Captioned";
+  private static final String TYPE_CLASSIC = "Classic";
+  private static final String TYPE_BANNER = "Banner";
+  private static final String ID = "id";
+  private static final String CREATED = "created";
+  private static final String EXPIRES_AT = "expiresAt";
+  private static final String VIEWED = "viewed";
+  private static final String CLICKED = "clicked";
+  private static final String PINNED = "pinned";
+  private static final String DISMISSED = "dismissed";
+  private static final String DISMISSABLE = "dismissable";
+  private static final String URL = "url";
+  private static final String OPEN_URL_IN_WEB_VIEW = "openURLInWebView";
+  private static final String EXTRAS = "extras";
+  private static final String IMAGE = "image";
+  private static final String IMAGE_ASPECT_RATIO = "imageAspectRatio";
+  private static final String TITLE = "title";
+  private static final String CARD_DESCRIPTION = "cardDescription";
+  private static final String DOMAIN = "domain";
+  private static final String TYPE = "type";
+
   private final Object mCallbackWasCalledMapLock = new Object();
+  private IEventSubscriber<ContentCardsUpdatedEvent> mContentCardsUpdatedSubscriber;
+  private final List<Card> mContentCards = new ArrayList<>();
+  private long mContentCardsUpdatedAt = 0;
   private Map<Callback, IEventSubscriber<FeedUpdatedEvent>> mFeedSubscriberMap = new ConcurrentHashMap<Callback, IEventSubscriber<FeedUpdatedEvent>>();
   private Map<Callback, Boolean> mCallbackWasCalledMap = new ConcurrentHashMap<Callback, Boolean>();
 
   public AppboyReactBridge(ReactApplicationContext reactContext) {
     super(reactContext);
+    subscribeToContentCardsUpdatedEvent();
   }
 
   @Override
@@ -597,6 +635,174 @@ public class AppboyReactBridge extends ReactContextBaseJavaModule {
   @ReactMethod
   public void getInstallTrackingId(Callback callback) {
     reportResultWithCallback(callback, null, Appboy.getInstance(getReactApplicationContext()).getInstallTrackingId());
+  }
+
+  @ReactMethod
+  public void getContentCards(final Promise promise) {
+    final IEventSubscriber<ContentCardsUpdatedEvent> subscriber = new IEventSubscriber<ContentCardsUpdatedEvent>() {
+      @Override
+      public void trigger(ContentCardsUpdatedEvent event) {
+        promise.resolve(mapContentCards(event.getAllCards()));
+        updateContentCardsIfNeeded(event);
+        Appboy.getInstance(getReactApplicationContext()).removeSingleSubscription(this, ContentCardsUpdatedEvent.class);
+      }
+    };
+    Appboy.getInstance(getReactApplicationContext()).subscribeToContentCardsUpdates(subscriber);
+    Appboy.getInstance(getReactApplicationContext()).requestContentCardsRefresh(true);
+  }
+
+  private WritableArray mapContentCards(List<Card> cardsList) {
+    WritableArray cards = Arguments.createArray();
+    for (Card card : cardsList.toArray(new Card[0])) {
+      cards.pushMap(mapContentCard(card));
+    }
+    return cards;
+  }
+
+  private WritableMap mapContentCard(Card card) {
+    WritableMap mappedCard = Arguments.createMap();
+    mappedCard.putString(ID, card.getId());
+    mappedCard.putDouble(CREATED, card.getCreated());
+    mappedCard.putDouble(EXPIRES_AT, card.getExpiresAt());
+    mappedCard.putBoolean(VIEWED, card.getViewed());
+    mappedCard.putBoolean(CLICKED, card.isClicked());
+    mappedCard.putBoolean(PINNED, card.getIsPinned());
+    mappedCard.putBoolean(DISMISSED, card.isDismissed());
+    mappedCard.putBoolean(DISMISSABLE, card.getIsDismissible());
+    mappedCard.putString(URL, card.getUrl());
+    mappedCard.putBoolean(OPEN_URL_IN_WEB_VIEW, card.getOpenUriInWebView());
+
+    // Extras
+    WritableMap extras = Arguments.createMap();
+    for (Map.Entry<String, String> entry : card.getExtras().entrySet()) {
+      extras.putString(entry.getKey(), entry.getValue());
+    }
+    mappedCard.putMap(EXTRAS, extras);
+
+    // Map according to card type
+    switch (card.getCardType()) {
+      case BANNER:
+        mappedCard.merge(bannerImageCardToWritableMap((BannerImageCard) card));
+        break;
+      case CAPTIONED_IMAGE:
+        mappedCard.merge(captionedImageCardToWritableMap((CaptionedImageCard)card));
+        break;
+      case DEFAULT:
+        break;
+      case SHORT_NEWS:
+        mappedCard.merge(shortNewsCardToWritableMap((ShortNewsCard)card));
+        break;
+      case TEXT_ANNOUNCEMENT:
+        mappedCard.merge(textAnnouncementCardToWritableMap((TextAnnouncementCard)card));
+        break;
+      case CONTROL:
+        break;
+    }
+
+    return mappedCard;
+  }
+
+  private WritableMap captionedImageCardToWritableMap(CaptionedImageCard card) {
+    WritableMap mappedCard = Arguments.createMap();
+    mappedCard.putString(IMAGE, card.getImageUrl());
+    mappedCard.putDouble(IMAGE_ASPECT_RATIO, card.getAspectRatio());
+    mappedCard.putString(TITLE, card.getTitle());
+    mappedCard.putString(CARD_DESCRIPTION, card.getDescription());
+    mappedCard.putString(DOMAIN, card.getDomain());
+    mappedCard.putString(TYPE, TYPE_CAPTIONED);
+    return mappedCard;
+  }
+
+  private WritableMap shortNewsCardToWritableMap(ShortNewsCard card) {
+    WritableMap mappedCard = Arguments.createMap();
+    mappedCard.putString(IMAGE, card.getImageUrl());
+    mappedCard.putString(TITLE, card.getTitle());
+    mappedCard.putString(CARD_DESCRIPTION, card.getDescription());
+    mappedCard.putString(DOMAIN, card.getDomain());
+    mappedCard.putString(TYPE, TYPE_CLASSIC);
+    return mappedCard;
+  }
+
+  private WritableMap textAnnouncementCardToWritableMap(TextAnnouncementCard card) {
+    WritableMap mappedCard = Arguments.createMap();
+    mappedCard.putString(TITLE, card.getTitle());
+    mappedCard.putString(CARD_DESCRIPTION, card.getDescription());
+    mappedCard.putString(DOMAIN, card.getDomain());
+    mappedCard.putString(TYPE, TYPE_CLASSIC);
+    return mappedCard;
+  }
+
+  private WritableMap bannerImageCardToWritableMap(BannerImageCard card) {
+    WritableMap mappedCard = Arguments.createMap();
+    mappedCard.putString(IMAGE, card.getImageUrl());
+    mappedCard.putDouble(IMAGE_ASPECT_RATIO, card.getAspectRatio());
+    mappedCard.putString(DOMAIN, card.getDomain());
+    mappedCard.putString(TYPE, TYPE_BANNER);
+    return mappedCard;
+  }
+
+  private void subscribeToContentCardsUpdatedEvent() {
+    Appboy.getInstance(getReactApplicationContext())
+      .removeSingleSubscription(mContentCardsUpdatedSubscriber, ContentCardsUpdatedEvent.class);
+    mContentCardsUpdatedSubscriber = new IEventSubscriber<ContentCardsUpdatedEvent>() {
+      @Override
+      public void trigger(ContentCardsUpdatedEvent event) {
+        boolean updated = event.getLastUpdatedInSecondsFromEpoch() > mContentCardsUpdatedAt;
+        if (updated) {
+                getReactApplicationContext()
+                .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter.class)
+                .emit(CONTENT_CARDS_UPDATED_EVENT_NAME, updated);
+        }
+        updateContentCardsIfNeeded(event);
+      }
+    };
+    Appboy.getInstance(getReactApplicationContext()).subscribeToContentCardsUpdates(mContentCardsUpdatedSubscriber);
+  }
+
+  private void updateContentCardsIfNeeded(ContentCardsUpdatedEvent event) {
+    if (event.getLastUpdatedInSecondsFromEpoch() > mContentCardsUpdatedAt) {
+      mContentCardsUpdatedAt = event.getLastUpdatedInSecondsFromEpoch();
+      mContentCards.clear();
+      mContentCards.addAll(event.getAllCards());
+    }
+  }
+
+  @ReactMethod
+  private void logContentCardsDisplayed() {
+    Appboy.getInstance(getReactApplicationContext()).logContentCardsDisplayed();
+  }
+
+  @ReactMethod
+  private void logContentCardDismissed(String id) {
+    Card card = getCardById(id);
+    if (card != null) {
+      card.setIsDismissed(true);
+    }
+  }
+
+  @ReactMethod
+  private void logContentCardClicked(String id) {
+    Card card = getCardById(id);
+    if (card != null) {
+      card.logClick();
+    }
+  }
+
+  @ReactMethod
+  private void logContentCardImpression(String id) {
+    Card card = getCardById(id);
+    if (card != null) {
+      card.logImpression();
+    }
+  }
+
+  private @Nullable Card getCardById(String id) {
+    for (Card card : mContentCards) {
+      if (card.getId().equals(id)) {
+        return card;
+      }
+    }
+    return null;
   }
 
   private Month parseMonth(int monthInt) {

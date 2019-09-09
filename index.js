@@ -1,5 +1,13 @@
 const AppboyReactBridge = require('react-native').NativeModules.AppboyReactBridge;
 
+const Platform = require('react-native').Platform;
+const NativeEventEmitter = require('react-native').NativeEventEmitter;
+const DeviceEventEmitter = require('react-native').DeviceEventEmitter;
+
+const AppboyEventEmitter = Platform.select({
+  ios: new NativeEventEmitter(AppboyReactBridge),
+  android: DeviceEventEmitter
+});
 /**
 * This default callback logs errors and null or false results. AppboyReactBridge methods with callbacks will
 * default to this if there is no user-provided callback.
@@ -571,7 +579,62 @@ var ReactAppboy = {
   requestContentCardsRefresh: function() {
     AppboyReactBridge.requestContentCardsRefresh();
   },
+  /**
+   * Returns a content cards array
+   * @returns {Promise<ContentCard[]>}
+   */
+  getContentCards: async function() {
+    return AppboyReactBridge.getContentCards();
+  },
 
+  /**
+   * Manually log a click to Braze for a particular card.
+   * The SDK will only log a card click when the card has the url property with a valid value.
+   * @param {string} id
+   */
+  logContentCardClicked: function(id) {
+    AppboyReactBridge.logContentCardClicked(id);
+  },
+
+  /**
+   * Manually log a dismissal to Braze for a particular card.
+   * @param {string} id
+   */
+  logContentCardDismissed: function(id) {
+    AppboyReactBridge.logContentCardDismissed(id);
+  },
+
+  /**
+   * Manually log an impression to Braze for a particular card.
+   * @param {string} id
+   */
+  logContentCardImpression: function(id) {
+    AppboyReactBridge.logContentCardImpression(id);
+  },
+
+  /**
+   * When displaying the Content Cards in your own user interface,
+   * you can manually record Content Cards impressions via the method logContentCardsDisplayed;
+   */
+  logContentCardsDisplayed: function() {
+    AppboyReactBridge.logContentCardsDisplayed();
+  },
+   /**
+   * Subscribes to the specific SDK event
+   * @param {AppboyEvents} event
+   * @param {function} subscriber
+   */
+  addListener: function(event, subscriber) {
+    return AppboyEventEmitter.addListener(event, subscriber);
+  },
+    /**
+   * Removes subscriptions for the specific SDK event and subscriber
+   * @param {AppboyEvents} event
+   * @param {function} subscriber
+   */
+  removeSubscription: function(event, subscriber) {
+    AppboyEventEmitter.removeSubscription(event, subscriber);
+  },
   // Dismiss In App Message
   /**
   * Dismisses the currently displayed in app message.
@@ -610,7 +673,17 @@ var ReactAppboy = {
     'CARD_WIDTH_FOR_IPAD': 'cardWidthForiPad',
     'MINIMUM_CARD_MARGIN_FOR_IPHONE': 'minimumCardMarginForiPhone',
     'MINIMUM_CARD_MARGIN_FOR_IPAD': 'minimumCardMarginForiPad'
-  }
+  },
+  
+  ContentCardTypes: {
+    'CLASSIC': 'Classic',
+    'BANNER': 'Banner',
+    'CAPTIONED': 'Captioned'
+  },
+
+  AppboyEvents: {
+    'CONTENT_CARDS_UPDATED': 'contentCardsUpdated'
+  },
 };
 
 module.exports = ReactAppboy;
